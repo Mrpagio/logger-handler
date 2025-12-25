@@ -59,7 +59,7 @@ func (sl *SpanLogger) sendLogCmd(op OpType, err error) {
 		Err:     err,
 	}
 	// aggiungo il comando alla coda del LoggerHandler
-	sl.loggerHandler.AppendLogCommand(lc)
+	sl.loggerHandler.AppendCommand(lc)
 	// svuoto il buffer
 	sl.buffer = []slog.Record{}
 }

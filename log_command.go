@@ -17,3 +17,18 @@ type LogCommand struct {
 	Records []slog.Record
 	Err     error // Usato solo per OpReleaseFailure
 }
+
+func (lc *LogCommand) TypeString() string {
+	switch lc.Op {
+	case OpLog:
+		return "Log"
+	case OpReleaseSuccess:
+		return "ReleaseSuccess"
+	case OpReleaseFailure:
+		return "ReleaseFailure"
+	case OpTimeout:
+		return "Timeout"
+	default:
+		return "Unknown"
+	}
+}

@@ -1,7 +1,10 @@
 package loggerhandler
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,9 +13,14 @@ import (
 )
 
 type LoggerHandler struct {
-	handler slog.Handler
-	meter   MeterInterface
-	spans   map[string]*SpanLogger
+	logWriter *WriterConfigs
+	errWriter *WriterConfigs
+
+	tmpHandler *slog.JSONHandler
+	strBuilder strings.Builder
+
+	meter MeterInterface
+	spans map[string]*SpanLogger
 
 	channel   chan LogCommand
 	wg        *sync.WaitGroup
@@ -28,9 +36,10 @@ type LoggerHandler struct {
 	activeSpansGauge Int64UpDownCounterLike
 }
 
-func NewLoggerHandler(handler slog.Handler, meter MeterInterface, bufferSize int) *LoggerHandler {
+func NewLoggerHandler(logConfig *WriterConfigs, errConfig *WriterConfigs, meter MeterInterface, bufferSize int) *LoggerHandler {
 	lh := &LoggerHandler{
-		handler:   handler,
+		logWriter: logConfig,
+		errWriter: errConfig,
 		meter:     meter,
 		spans:     make(map[string]*SpanLogger),
 		channel:   make(chan LogCommand, bufferSize),
@@ -39,7 +48,14 @@ func NewLoggerHandler(handler slog.Handler, meter MeterInterface, bufferSize int
 		mu:        &sync.Mutex{},
 	}
 
-	err := lh.initMetrics()
+	// Creo un handler temporaneo per la scrittura su buffer
+	err := lh.initTempHandler()
+	if err != nil {
+		panic("Errore nell'inizializzazione dell'handler temporaneo: " + err.Error())
+	}
+
+	// Inizializzo le metriche
+	err = lh.initMetrics()
 	if err != nil {
 		panic("Errore nell'inizializzazione delle metriche: " + err.Error())
 	}
@@ -48,11 +64,18 @@ func NewLoggerHandler(handler slog.Handler, meter MeterInterface, bufferSize int
 	go func() {
 		defer lh.wg.Done()
 		for cmd := range lh.channel {
-			lh.processLogCommand(cmd)
+			lh.processCommand(cmd)
 		}
 	}()
 
 	return lh
+}
+
+func (lh *LoggerHandler) initTempHandler() error {
+	lh.strBuilder = strings.Builder{}
+
+	lh.tmpHandler = slog.NewJSONHandler(&lh.strBuilder, nil)
+	return nil
 }
 
 func (lh *LoggerHandler) initMetrics() error {
@@ -80,8 +103,12 @@ func (lh *LoggerHandler) GetMeter() MeterInterface {
 	return lh.meter
 }
 
-func (lh *LoggerHandler) GetHandler() slog.Handler {
-	return lh.handler
+func (lh *LoggerHandler) GetLogHandler() *WriterConfigs {
+	return lh.logWriter
+}
+
+func (lh *LoggerHandler) GetErrorHandler() *WriterConfigs {
+	return lh.errWriter
 }
 
 func (lh *LoggerHandler) GetSpans() map[string]*SpanLogger {
@@ -137,10 +164,127 @@ func (lh *LoggerHandler) RemoveSpan(id string) {
 	}
 }
 
-func (lh *LoggerHandler) AppendLogCommand(cmd LogCommand) {
+func (lh *LoggerHandler) AppendCommand(cmd LogCommand) {
 	lh.channel <- cmd
 }
 
-func (lh *LoggerHandler) processLogCommand(cmd LogCommand) {
+func (lh *LoggerHandler) processCommand(cmd LogCommand) {
+	lh.createStrLog(cmd)
+	// Scrivo il log in base al tipo di operazione
+	lh.writeToHandler(cmd.Op)
+}
 
+func (lh *LoggerHandler) createStrLog(cmd LogCommand) {
+	// Se non ci sono record, esco
+	if len(cmd.Records) == 0 {
+		return
+	}
+
+	// Al momento non supporta context.Context, ne creo uno fittizio
+	ctx := context.TODO()
+
+	// Resetto lo string builder
+	lh.strBuilder.Reset()
+	// Aggiungo una riga di separazione allo string builder
+	lh.strBuilder.WriteString("----- OpType: " + cmd.TypeString() + " ----- Span ID: " + cmd.SpanID + " -----\n")
+	lastTimestamp := time.Now()
+
+	// Ciclo sui record
+	for _, record := range cmd.Records {
+		// Aggiungo il record al log
+		lastTimestamp = record.Time
+		err := lh.tmpHandler.Handle(ctx, record)
+		if err != nil {
+			// Gestisco l'errore (al momento lo ignoro)
+			continue
+		}
+	}
+
+	if cmd.Op == OpReleaseFailure && cmd.Err != nil {
+		// Creo un record per l'errore
+		errRecord := slog.NewRecord(lastTimestamp, slog.LevelError, "Errore nello span: "+cmd.Err.Error(), 0)
+		// Aggiungo il record al log
+		_ = lh.tmpHandler.Handle(ctx, errRecord)
+	}
+
+	// Aggiungo una riga di chiusura allo string builder
+	lh.strBuilder.WriteString("--------------------")
+}
+
+func (lh *LoggerHandler) writeToHandler(op OpType) {
+	var err error
+	switch op {
+	case OpLog:
+		err = lh.processOpLog()
+		if err != nil {
+			return
+		}
+	case OpReleaseSuccess:
+		err = lh.processOpSuccess()
+		if err != nil {
+			return
+		}
+	case OpReleaseFailure:
+		err = lh.processOpFailure()
+		if err != nil {
+			return
+		}
+	case OpTimeout:
+		err = lh.processOpTimeout()
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (lh *LoggerHandler) processOpLog() error {
+	// Scrivo sul log handler la stringa presente nello string builder
+	_, err := fmt.Fprintln(lh.logWriter.GetMultiWriter(), lh.strBuilder.String())
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (lh *LoggerHandler) processOpFailure() error {
+	_, err := fmt.Fprintln(lh.errWriter.GetMultiWriter(), lh.strBuilder.String())
+	if err != nil {
+		return err
+	}
+	// Aggiorno il contatore dei fallimenti
+	lh.failureCounter.Add(1)
+	// Aggiorno il contatore totale
+	lh.totalCounter.Add(1)
+	return nil
+}
+
+func (lh *LoggerHandler) processOpSuccess() error {
+	// Incremento il contatore dei successi
+	lh.successCounter.Add(1)
+	// Incremento il contatore totale
+	lh.totalCounter.Add(1)
+	// Se la lunghezza dello string builder è zero, non scrivo nulla
+	if lh.strBuilder.Len() == 0 {
+		return nil
+	}
+
+	// Scrivo sul log handler la stringa presente nello string builder
+	_, err := fmt.Fprintln(lh.logWriter.GetMultiWriter(), lh.strBuilder.String())
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (lh *LoggerHandler) processOpTimeout() error {
+	_, err := fmt.Fprintln(lh.errWriter.GetMultiWriter(), lh.strBuilder.String())
+	if err != nil {
+		return err
+	}
+	// Aggiorno il contatore dei fallimenti
+	lh.failureCounter.Add(1)
+	// Aggiorno il contatore totale
+	lh.totalCounter.Add(1)
+	return nil
 }
