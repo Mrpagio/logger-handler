@@ -119,7 +119,14 @@ func (lh *LoggerHandler) GetErrorHandler() *WriterConfigs {
 }
 
 func (lh *LoggerHandler) GetSpans() map[string]*SpanLogger {
-	return lh.spans
+	// Copia superficiale protetta dal mutex per evitare race esterne
+	lh.mu.Lock()
+	defer lh.mu.Unlock()
+	cp := make(map[string]*SpanLogger, len(lh.spans))
+	for k, v := range lh.spans {
+		cp[k] = v
+	}
+	return cp
 }
 
 func (lh *LoggerHandler) GetTotalCounter() Int64CounterLike {
@@ -155,10 +162,15 @@ func (lh *LoggerHandler) AddSpan(duration time.Duration, tags []string, bufferSi
 
 	span := NewSpanLogger(spanID, duration, tags, bufferSize, lh, level)
 
-	// Aggiorna lo span nella mappa
+	// Aggiorna lo span nella mappa in modo concorrente-sicuro
+	lh.mu.Lock()
 	lh.spans[spanID] = span
+	lh.mu.Unlock()
 
-	// Aggiorno il contatori metrici se esistono
+	// Aggiorno il contatori metrici se esistono (robustezza nil)
+	if lh.totalCounter != nil {
+		// non modifichiamo qui il totale, serve solo come esempio se volessimo
+	}
 
 	return span
 }
@@ -175,6 +187,8 @@ func (lh *LoggerHandler) generateSpanID() (string, bool) {
 }
 
 func (lh *LoggerHandler) addSpanToMap(id string) bool {
+	lh.mu.Lock()
+	defer lh.mu.Unlock()
 	if _, exists := lh.spans[id]; exists {
 		return false
 	}
@@ -182,16 +196,22 @@ func (lh *LoggerHandler) addSpanToMap(id string) bool {
 	// Aggiungilo alla mappa degli span
 	lh.spans[id] = nil // Placeholder, lo span verrà creato successivamente
 
-	// incrementa il contatore degli span attivi
-	lh.activeSpansGauge.Add(1)
+	// incrementa il contatore degli span attivi (robustezza nil)
+	if lh.activeSpansGauge != nil {
+		lh.activeSpansGauge.Add(1)
+	}
 	return true
 }
 
 func (lh *LoggerHandler) RemoveSpan(id string) {
+	lh.mu.Lock()
+	defer lh.mu.Unlock()
 	if _, exists := lh.spans[id]; exists {
 		delete(lh.spans, id)
 
-		lh.activeSpansGauge.Add(-1)
+		if lh.activeSpansGauge != nil {
+			lh.activeSpansGauge.Add(-1)
+		}
 	}
 }
 
@@ -349,10 +369,16 @@ func (lh *LoggerHandler) processOpTimeout(spanId string) error {
 }
 
 func (lh *LoggerHandler) checkSpanExists(cmd LogCommand) LogCommand {
-	if _, exists := lh.spans[cmd.SpanID]; !exists {
+	lh.mu.Lock()
+	_, exists := lh.spans[cmd.SpanID]
+	lh.mu.Unlock()
+
+	if !exists {
 		// Lo SpanID non esiste
-		// Incremento il contatore degli span non validi
-		lh.invalidSpanCounter.Add(1)
+		// Incremento il contatore degli span non validi (robustezza nil)
+		if lh.invalidSpanCounter != nil {
+			lh.invalidSpanCounter.Add(1)
+		}
 		// Creo un record di errore
 		errRecord := slog.NewRecord(time.Now(), slog.LevelError, "SpanID non trovato: "+cmd.SpanID, 0)
 		// Aggiungo il record al log
