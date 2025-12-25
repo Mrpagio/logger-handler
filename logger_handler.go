@@ -28,9 +28,16 @@ type LoggerHandler struct {
 	mu        *sync.Mutex
 
 	// Metriche Otel per Report Temporali
-	totalCounter   Int64CounterLike
+	// Contatori cumulativi
+	totalCounter Int64CounterLike
+	// Contatori di successo
 	successCounter Int64CounterLike
+	// Contatori di fallimento
 	failureCounter Int64CounterLike
+	// Contatori di LogCommand scartati perchè il buffer era pieno
+	discardedCounter Int64CounterLike
+	// Contatori di LogCommand con Span scaduti o non presenti
+	invalidSpanCounter Int64CounterLike
 
 	// Indicatori istantanei
 	activeSpansGauge Int64UpDownCounterLike
@@ -115,6 +122,30 @@ func (lh *LoggerHandler) GetSpans() map[string]*SpanLogger {
 	return lh.spans
 }
 
+func (lh *LoggerHandler) GetTotalCounter() Int64CounterLike {
+	return lh.totalCounter
+}
+
+func (lh *LoggerHandler) GetSuccessCounter() Int64CounterLike {
+	return lh.successCounter
+}
+
+func (lh *LoggerHandler) GetFailureCounter() Int64CounterLike {
+	return lh.failureCounter
+}
+
+func (lh *LoggerHandler) GetDiscardedCounter() Int64CounterLike {
+	return lh.discardedCounter
+}
+
+func (lh *LoggerHandler) GetInvalidSpanCounter() Int64CounterLike {
+	return lh.invalidSpanCounter
+}
+
+func (lh *LoggerHandler) GetActiveSpansGauge() Int64UpDownCounterLike {
+	return lh.activeSpansGauge
+}
+
 func (lh *LoggerHandler) AddSpan(duration time.Duration, tags []string, bufferSize int, level slog.Level) *SpanLogger {
 	var spanID string
 	done := false
@@ -165,13 +196,27 @@ func (lh *LoggerHandler) RemoveSpan(id string) {
 }
 
 func (lh *LoggerHandler) AppendCommand(cmd LogCommand) {
-	lh.channel <- cmd
+	// Controllo se il canale è pieno
+	select {
+	case lh.channel <- cmd:
+		// Comando aggiunto con successo
+		return
+	default:
+		// Canale pieno, scarto il comando
+		lh.discardedCounter.Add(1)
+		return
+	}
 }
 
 func (lh *LoggerHandler) processCommand(cmd LogCommand) {
+	// Controllo che lo SpanID esista
+	cmd = lh.checkSpanExists(cmd)
+
+	// Creo la stringa di log nello string builder
 	lh.createStrLog(cmd)
+
 	// Scrivo il log in base al tipo di operazione
-	lh.writeToHandler(cmd.Op)
+	lh.writeToHandler(cmd)
 }
 
 func (lh *LoggerHandler) createStrLog(cmd LogCommand) {
@@ -211,26 +256,26 @@ func (lh *LoggerHandler) createStrLog(cmd LogCommand) {
 	lh.strBuilder.WriteString("--------------------")
 }
 
-func (lh *LoggerHandler) writeToHandler(op OpType) {
+func (lh *LoggerHandler) writeToHandler(cmd LogCommand) {
 	var err error
-	switch op {
+	switch cmd.Op {
 	case OpLog:
-		err = lh.processOpLog()
+		err = lh.processOpLog(cmd.SpanID)
 		if err != nil {
 			return
 		}
 	case OpReleaseSuccess:
-		err = lh.processOpSuccess()
+		err = lh.processOpSuccess(cmd.SpanID)
 		if err != nil {
 			return
 		}
 	case OpReleaseFailure:
-		err = lh.processOpFailure()
+		err = lh.processOpFailure(cmd.SpanID)
 		if err != nil {
 			return
 		}
 	case OpTimeout:
-		err = lh.processOpTimeout()
+		err = lh.processOpTimeout(cmd.SpanID)
 		if err != nil {
 			return
 		}
@@ -238,7 +283,7 @@ func (lh *LoggerHandler) writeToHandler(op OpType) {
 	return
 }
 
-func (lh *LoggerHandler) processOpLog() error {
+func (lh *LoggerHandler) processOpLog(spanId string) error {
 	// Scrivo sul log handler la stringa presente nello string builder
 	_, err := fmt.Fprintln(lh.logWriter.GetMultiWriter(), lh.strBuilder.String())
 	if err != nil {
@@ -247,23 +292,32 @@ func (lh *LoggerHandler) processOpLog() error {
 	return nil
 }
 
-func (lh *LoggerHandler) processOpFailure() error {
-	_, err := fmt.Fprintln(lh.errWriter.GetMultiWriter(), lh.strBuilder.String())
-	if err != nil {
-		return err
-	}
+func (lh *LoggerHandler) processOpFailure(spanId string) error {
 	// Aggiorno il contatore dei fallimenti
 	lh.failureCounter.Add(1)
 	// Aggiorno il contatore totale
 	lh.totalCounter.Add(1)
+
+	// Rimuovo gli span completati con successo dalla mappa
+	lh.RemoveSpan(spanId)
+
+	_, err := fmt.Fprintln(lh.errWriter.GetMultiWriter(), lh.strBuilder.String())
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (lh *LoggerHandler) processOpSuccess() error {
+func (lh *LoggerHandler) processOpSuccess(spanId string) error {
 	// Incremento il contatore dei successi
 	lh.successCounter.Add(1)
 	// Incremento il contatore totale
 	lh.totalCounter.Add(1)
+
+	// Rimuovo gli span completati con successo dalla mappa
+	lh.RemoveSpan(spanId)
+
 	// Se la lunghezza dello string builder è zero, non scrivo nulla
 	if lh.strBuilder.Len() == 0 {
 		return nil
@@ -277,14 +331,41 @@ func (lh *LoggerHandler) processOpSuccess() error {
 	return nil
 }
 
-func (lh *LoggerHandler) processOpTimeout() error {
-	_, err := fmt.Fprintln(lh.errWriter.GetMultiWriter(), lh.strBuilder.String())
-	if err != nil {
-		return err
-	}
+func (lh *LoggerHandler) processOpTimeout(spanId string) error {
 	// Aggiorno il contatore dei fallimenti
 	lh.failureCounter.Add(1)
 	// Aggiorno il contatore totale
 	lh.totalCounter.Add(1)
+
+	// Rimuovo gli span completati con successo dalla mappa
+	lh.RemoveSpan(spanId)
+
+	_, err := fmt.Fprintln(lh.errWriter.GetMultiWriter(), lh.strBuilder.String())
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (lh *LoggerHandler) checkSpanExists(cmd LogCommand) LogCommand {
+	if _, exists := lh.spans[cmd.SpanID]; !exists {
+		// Lo SpanID non esiste
+		// Incremento il contatore degli span non validi
+		lh.invalidSpanCounter.Add(1)
+		// Creo un record di errore
+		errRecord := slog.NewRecord(time.Now(), slog.LevelError, "SpanID non trovato: "+cmd.SpanID, 0)
+		// Aggiungo il record al log
+		cmd.Records = append(cmd.Records, errRecord)
+		// Forzo l'operazione a essere un failure
+		cmd.Op = OpReleaseFailure
+	}
+	return cmd
+}
+
+func (lh *LoggerHandler) Close() {
+	lh.closeOnce.Do(func() {
+		close(lh.channel)
+		lh.wg.Wait()
+	})
 }
