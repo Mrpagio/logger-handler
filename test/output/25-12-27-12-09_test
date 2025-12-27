@@ -1,0 +1,6 @@
+Running: go test -v ./...
+# ./...
+pattern ./...: directory prefix . does not contain main module or its selected dependencies
+FAIL	./... [setup failed]
+FAIL
+Exit code: 1

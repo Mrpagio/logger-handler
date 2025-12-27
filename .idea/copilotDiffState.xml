@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CopilotDiffPersistence">
+    <option name="pendingDiffs">
+      <map>
+        <entry key="$PROJECT_DIR$/test/output/run_all_tests.sh">
+          <value>
+            <PendingDiffInfo>
+              <option name="filePath" value="$PROJECT_DIR$/test/output/run_all_tests.sh" />
+              <option name="updatedContent" value="#!/usr/bin/env bash&#10;# Run all go tests in the repository and write output to a timestamped file in this directory&#10;# Filename format: &lt;YY-MM-DD-hh-mm&gt;_test&#10;# Usage: ./run_all_tests.sh&#10;&#10;set -uo pipefail&#10;&#10;# Resolve script directory (this file's directory)&#10;SCRIPT_DIR=&quot;$(cd &quot;$(dirname &quot;${BASH_SOURCE[0]}&quot;)&quot; &amp;&amp; pwd)&quot;&#10;OUT_DIR=&quot;$SCRIPT_DIR&quot;&#10;TIMESTAMP=&quot;$(date +'%y-%m-%d-%H-%M')&quot;&#10;OUTFILE=&quot;$OUT_DIR/${TIMESTAMP}_test&quot;&#10;&#10;# Ensure output dir exists (should be the script dir)&#10;mkdir -p &quot;$OUT_DIR&quot;&#10;&#10;# Move to repository root (two levels up from test/output -&gt; repo root)&#10;cd &quot;$SCRIPT_DIR/../..&quot; || { echo &quot;Failed to cd to repo root&quot; &gt;&amp;2; exit 2; }&#10;&#10;echo &quot;Running: go test -v ./...&quot; | tee &quot;$OUTFILE&quot;&#10;# Run tests and append both stdout and stderr to the outfile&#10;if go test -v ./... &gt;&gt; &quot;$OUTFILE&quot; 2&gt;&amp;1; then&#10;  RC=0&#10;else&#10;  RC=$?&#10;fi&#10;&#10;echo &quot;Exit code: $RC&quot; &gt;&gt; &quot;$OUTFILE&quot;&#10;&#10;echo &quot;Wrote test output to: $OUTFILE&quot;&#10;exit $RC&#10;" />
+            </PendingDiffInfo>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>

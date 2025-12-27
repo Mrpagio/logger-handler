@@ -1,0 +1,53 @@
+Running: go test -v ./...
+?   	github.com/Mrpagio/logger-handler	[no test files]
+?   	github.com/Mrpagio/logger-handler/example	[no test files]
+=== RUN   TestNewLogConfigsAndGetters
+time=2025-12-27T12:11:44.279+01:00 level=INFO msg=test k=v
+--- PASS: TestNewLogConfigsAndGetters (0.00s)
+=== RUN   TestLogCommandTypeString
+--- PASS: TestLogCommandTypeString (0.00s)
+=== RUN   TestNewLoggerHandler
+--- PASS: TestNewLoggerHandler (0.00s)
+=== RUN   TestAddSpanTable
+=== RUN   TestAddSpanTable/no-timeout-debug
+=== RUN   TestAddSpanTable/short-timeout-info
+--- PASS: TestAddSpanTable (0.00s)
+    --- PASS: TestAddSpanTable/no-timeout-debug (0.00s)
+    --- PASS: TestAddSpanTable/short-timeout-info (0.00s)
+=== RUN   TestTimeoutTable
+=== RUN   TestTimeoutTable/very-short
+----- OpType: Timeout ----- Span ID: 019b5f81-da97-75cc-bd22-cee93118c5c5 -----
+{"time":"2025-12-27T12:11:44.289644+01:00","level":"ERROR","msg":"Span timeout reached"}
+--------------------
+=== RUN   TestTimeoutTable/short
+----- OpType: Timeout ----- Span ID: 019b5f81-db60-72f5-9dec-6d8b8157b954 -----
+{"time":"2025-12-27T12:11:44.51046+01:00","level":"ERROR","msg":"Span timeout reached"}
+--------------------
+--- PASS: TestTimeoutTable (0.40s)
+    --- PASS: TestTimeoutTable/very-short (0.20s)
+    --- PASS: TestTimeoutTable/short (0.20s)
+=== RUN   TestTimersConcurrencyStress
+--- PASS: TestTimersConcurrencyStress (0.50s)
+=== RUN   TestTimeoutAfterReleaseQueued
+--- PASS: TestTimeoutAfterReleaseQueued (0.10s)
+=== RUN   TestMeterInterfaceFakeImplementations
+--- PASS: TestMeterInterfaceFakeImplementations (0.00s)
+=== RUN   TestSpanLoggerBasicAndCommands
+----- OpType: Log ----- Span ID: 019b5f81-de84-77e3-b651-afc025264a0e -----
+{"time":"2025-12-27T12:11:45.284519+01:00","level":"DEBUG","msg":"dbg"}
+--------------------
+----- OpType: ReleaseFailure ----- Span ID: 019b5f81-de84-77e3-b651-afc025264a0e -----
+{"time":"2025-12-27T12:11:45.294571+01:00","level":"ERROR","msg":"err"}
+{"time":"2025-12-27T12:11:45.294571+01:00","level":"ERROR","msg":"Errore nello span: err"}
+--------------------
+----- OpType: ReleaseFailure ----- Span ID: 019b5f81-de84-77e3-b651-afc025264a0e -----
+{"time":"2025-12-27T12:11:45.294571+01:00","level":"ERROR","msg":"err"}
+{"time":"2025-12-27T12:11:45.294571+01:00","level":"ERROR","msg":"Errore nello span: err"}
+--------------------
+----- OpType: Timeout ----- Span ID: 019b5f81-de99-7520-8824-4998acf056bf -----
+{"time":"2025-12-27T12:11:45.305336+01:00","level":"ERROR","msg":"Span timeout reached"}
+--------------------
+--- PASS: TestSpanLoggerBasicAndCommands (0.02s)
+PASS
+ok  	github.com/Mrpagio/logger-handler/test	(cached)
+Exit code: 0

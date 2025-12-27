@@ -15,8 +15,8 @@ OUTFILE="$OUT_DIR/${TIMESTAMP}_test"
 # Ensure output dir exists (should be test/output)
 mkdir -p "$OUT_DIR"
 
-# Move to repository root (two levels up from test/output -> repo root)
-cd "$SCRIPT_DIR/../.." || { echo "Failed to cd to repo root" >&2; exit 2; }
+# Move to repository root (one level up from test -> repo root)
+cd "$SCRIPT_DIR/.." || { echo "Failed to cd to repo root" >&2; exit 2; }
 
 echo "Running: go test -v ./..." | tee "$OUTFILE"
 # Run tests and append both stdout and stderr to the outfile

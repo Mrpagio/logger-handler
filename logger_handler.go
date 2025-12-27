@@ -116,7 +116,9 @@ func NewLoggerHandler(logConfig *WriterConfigs, errConfig *WriterConfigs, meter 
 			lh.mu.Unlock()
 
 			if span == nil {
-				if lh.invalidSpanCounter != nil {
+				// Se non è stato configurato un Meter (può essere nil), non possiamo aggiornare le metriche.
+				// Le metriche sono opzionali: aggiorniamo solo se `lh.meter` è presente.
+				if lh.meter != nil {
 					lh.invalidSpanCounter.Add(1)
 				}
 				continue
@@ -147,6 +149,10 @@ func (lh *LoggerHandler) initTempHandler() error {
 // Parametri: nessuno
 // Ritorna: errore se la creazione di una metrica fallisce
 func (lh *LoggerHandler) initMetrics() error {
+	if lh.meter == nil {
+		// Nessun meter configurato, esco
+		return nil
+	}
 	var err error
 	lh.totalCounter, err = lh.meter.Int64Counter("logger_total_spans", metric.WithDescription("Somma totale degli span creati"))
 	if err != nil {
@@ -289,8 +295,14 @@ func (lh *LoggerHandler) AddSpan(duration time.Duration, tags []string, bufferSi
 	}
 	lh.mu.Unlock()
 
-	// Aggiorno il contatori metrici se esistono (robustezza nil)
-	lh.activeSpansGauge.Add(1)
+	// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+	// solo se `lh.meter` è non-nil.
+	if lh.meter != nil {
+		// Aggiorno il contatori metrici se esistono (robustezza nil)
+		if lh.activeSpansGauge != nil {
+			lh.activeSpansGauge.Add(1)
+		}
+	}
 
 	return span
 }
@@ -323,9 +335,13 @@ func (lh *LoggerHandler) addSpanToMaps(id string) bool {
 	// Aggiungilo alla mappa degli span
 	lh.spans[id] = nil // Placeholder, lo span verrà creato successivamente
 
-	// incrementa il contatore degli span attivi (robustezza nil)
-	if lh.activeSpansGauge != nil {
-		lh.activeSpansGauge.Add(1)
+	// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+	// solo se `lh.meter` è non-nil.
+	if lh.meter != nil {
+		// incrementa il contatore degli span attivi (robustezza nil)
+		if lh.activeSpansGauge != nil {
+			lh.activeSpansGauge.Add(1)
+		}
 	}
 	return true
 }
@@ -349,8 +365,12 @@ func (lh *LoggerHandler) RemoveSpan(id string) {
 		}
 		delete(lh.spans, id)
 
-		if lh.activeSpansGauge != nil {
-			lh.activeSpansGauge.Add(-1)
+		// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+		// solo se `lh.meter` è non-nil.
+		if lh.meter != nil {
+			if lh.activeSpansGauge != nil {
+				lh.activeSpansGauge.Add(-1)
+			}
 		}
 	}
 }
@@ -367,7 +387,11 @@ func (lh *LoggerHandler) AppendCommand(cmd LogCommand) {
 		return
 	default:
 		// Canale pieno, scarto il comando
-		lh.discardedCounter.Add(1)
+		// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+		// solo se `lh.meter` è non-nil.
+		if lh.meter != nil {
+			lh.discardedCounter.Add(1)
+		}
 		return
 	}
 }
@@ -481,10 +505,14 @@ func (lh *LoggerHandler) processOpLog(_ string) error {
 // Parametri: spanId string
 // Ritorna: error se la scrittura fallisce, altrimenti nil
 func (lh *LoggerHandler) processOpFailure(spanId string) error {
-	// Aggiorno il contatore dei fallimenti
-	lh.failureCounter.Add(1)
-	// Aggiorno il contatore totale
-	lh.totalCounter.Add(1)
+	// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+	// solo se `lh.meter` è non-nil`.
+	if lh.meter != nil {
+		// Aggiorno il contatore dei fallimenti
+		lh.failureCounter.Add(1)
+		// Aggiorno il contatore totale
+		lh.totalCounter.Add(1)
+	}
 
 	// Rimuovo gli span completati con successo dalla mappa
 	lh.RemoveSpan(spanId)
@@ -502,10 +530,14 @@ func (lh *LoggerHandler) processOpFailure(spanId string) error {
 // Parametri: spanId string
 // Ritorna: error se la scrittura fallisce, altrimenti nil
 func (lh *LoggerHandler) processOpSuccess(spanId string) error {
-	// Incremento il contatore dei successi
-	lh.successCounter.Add(1)
-	// Incremento il contatore totale
-	lh.totalCounter.Add(1)
+	// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+	// solo se `lh.meter` è non-nil`.
+	if lh.meter != nil {
+		// Incremento il contatore dei successi
+		lh.successCounter.Add(1)
+		// Incremento il contatore totale
+		lh.totalCounter.Add(1)
+	}
 
 	// Rimuovo gli span completati con successo dalla mappa
 	lh.RemoveSpan(spanId)
@@ -528,10 +560,14 @@ func (lh *LoggerHandler) processOpSuccess(spanId string) error {
 // Parametri: spanId string
 // Ritorna: error se la scrittura fallisce, altrimenti nil
 func (lh *LoggerHandler) processOpTimeout(spanId string) error {
-	// Aggiorno il contatore dei fallimenti
-	lh.failureCounter.Add(1)
-	// Aggiorno il contatore totale
-	lh.totalCounter.Add(1)
+	// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+	// solo se `lh.meter` è non-nil`.
+	if lh.meter != nil {
+		// Aggiorno il contatore dei fallimenti
+		lh.failureCounter.Add(1)
+		// Aggiorno il contatore totale
+		lh.totalCounter.Add(1)
+	}
 
 	// Rimuovo gli span completati con successo dalla mappa
 	lh.RemoveSpan(spanId)
@@ -560,13 +596,15 @@ func (lh *LoggerHandler) checkSpanExists(cmd LogCommand) (LogCommand, bool) {
 
 	if !exists {
 		// Lo SpanID non esiste
-		// Incremento il contatore degli span non validi (robustezza nil)
-		if lh.invalidSpanCounter != nil {
+		// Controllo se è presente un Meter; le metriche sono opzionali quindi aggiorniamo
+		// solo se `lh.meter` è non-nil`.
+		if lh.meter != nil {
 			if cmd.Op == OpTimeout {
 				// Non conto i timeout come span non validi
 				// la chiusura dello span è già avvenuta poichè non presente in mappa degli Span
 				return cmd, false
 			}
+			// Incremento il contatore degli span non validi (robustezza nil)
 			lh.invalidSpanCounter.Add(1)
 		}
 		// Creo un record di errore
